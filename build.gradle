@@ -1,0 +1,80 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+version = mod_version
+group = mod_group_id
+
+base {
+    archivesName = mod_id
+}
+
+neoForge {
+    version = neo_version
+
+    runs {
+        client {
+            client()
+        }
+        server {
+            server()
+        }
+        data {
+            data()
+            programArguments = ['--all', '--mod', project.mod_id, '--output', file('src/generated/resources/').absolutePath, '--existing', file('src/main/resources/').absolutePath]
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet sourceSets.main
+        }
+    }
+}
+
+sourceSets.main.resources { srcDir 'src/generated/resources' }
+
+repositories {
+    maven {
+        // Reachable mirror of maven.neoforged.net (the original is blocked in some regions).
+        name = 'NeoForged'
+        url = 'https://neoforged.forgecdn.net/releases'
+    }
+    mavenCentral()
+}
+
+dependencies {
+    // Mixin is needed on the compile classpath for the @Mixin/@Inject/@ModifyVariable annotations.
+    compileOnly 'org.spongepowered:mixin:0.8.7'
+
+    // AppleSkin API, used only for the optional FoodValuesEvent compat (never bundled at runtime).
+    compileOnly files('ReferenceProject/[苹果皮] appleskin-neoforge-mc1.21-3.0.9.jar')
+}
+
+tasks.withType(ProcessResources).configureEach {
+    var replaceProperties = [
+            minecraft_version      : minecraft_version,
+            minecraft_version_range: minecraft_version_range,
+            neo_version            : neo_version,
+            neo_version_range      : neo_version_range,
+            loader_version_range   : loader_version_range,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : mod_version,
+            mod_authors            : mod_authors,
+            mod_description        : mod_description
+    ]
+    inputs.properties replaceProperties
+
+    filesMatching(['META-INF/neoforge.mods.toml']) {
+        expand replaceProperties
+    }
+}

@@ -1,0 +1,23 @@
+// Redirect the (blocked in some regions) maven.neoforged.net to the reachable neoforged.forgecdn.net mirror.
+def redirect = { ArtifactRepository repo ->
+    if (repo instanceof MavenArtifactRepository) {
+        String url = repo.url != null ? repo.url.toString() : ""
+        if (url.contains('maven.neoforged.net')) {
+            String newUrl = url.replace('maven.neoforged.net', 'neoforged.forgecdn.net')
+            repo.url = new URL(newUrl)
+        }
+    }
+}
+
+settingsEvaluated { settings ->
+    settings.pluginManagement.repositories.all redirect
+    settings.dependencyResolutionManagement?.repositories?.all redirect
+}
+
+allprojects {
+    repositories.whenObjectAdded redirect
+    buildscript.repositories.whenObjectAdded redirect
+    afterEvaluate {
+        repositories.all redirect
+    }
+}

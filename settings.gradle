@@ -1,0 +1,14 @@
+pluginManagement {
+    repositories {
+        mavenLocal()
+        maven { url = 'https://neoforged.forgecdn.net' }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+plugins {
+    id 'net.neoforged.moddev' version '1.0.21' apply false
+}
+
+rootProject.name = 'most_important_question'
