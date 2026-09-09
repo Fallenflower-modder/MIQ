@@ -2,6 +2,12 @@ package com.cloversecho.miq.recipe;
 
 import com.cloversecho.miq.config.MIQConfig;
 import com.cloversecho.miq.network.RecipeSyncPayload;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.google.gson.JsonSyntaxException;
+import com.mojang.logging.LogUtils;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
@@ -11,8 +17,8 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.effect.MobEffectInstance;
-import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.food.FoodProperties;
 import net.minecraft.world.item.Item;
@@ -22,6 +28,7 @@ import net.minecraft.world.item.component.Consumable;
 import net.minecraft.world.item.consume_effects.ApplyStatusEffectsConsumeEffect;
 import net.minecraft.world.item.consume_effects.ConsumeEffect;
 import net.neoforged.neoforge.network.PacketDistributor;
+import org.slf4j.Logger;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -41,6 +48,8 @@ import java.util.Map;
  * Scaling therefore rebuilds <em>both</em> components (see {@link #buildScaled}).
  */
 public final class DailyRecipeManager {
+
+    private static final Logger LOGGER = LogUtils.getLogger();
 
     /** The currently active recipe, shared by the logical server and the client. 当前生效的每日食谱。 */
     private static volatile Map<Item, DesireCategory> currentRecipe = Map.of();
@@ -491,21 +500,128 @@ public final class DailyRecipeManager {
             }
         }
 
-        if (cat == DesireCategory.VERY_WANT && MIQConfig.VERY_WANT_EXTRA_LUCK.get()) {
-            out.add(new ApplyStatusEffectsConsumeEffect(
-                    new MobEffectInstance(MobEffects.LUCK,
-                            MIQConfig.VERY_WANT_LUCK_DURATION_SECONDS.get() * 20, 0), 1.0f));
+        // Reward/penalty effect roll-tables: pick one option by weight and apply its effects.
+        // 奖励/惩罚效果表：按权重随机抽取一组效果并施加。
+        if (cat == DesireCategory.VERY_WANT) {
+            addRolledEffects(out, MIQConfig.REWARD_EFFECTS.get(), rng);
         } else if (cat == DesireCategory.DON_T_WANT && MIQConfig.ENABLE_PENALTY.get()) {
-            if (rng.nextFloat() < MIQConfig.DONT_WANT_PENALTY_EFFECT_CHANCE.get()) {
-                boolean hunger = rng.nextBoolean();
-                int ticks = (hunger
-                        ? MIQConfig.DONT_WANT_HUNGER_DURATION_SECONDS.get()
-                        : MIQConfig.DONT_WANT_NAUSEA_DURATION_SECONDS.get()) * 20;
-                MobEffectInstance penalty =
-                        new MobEffectInstance(hunger ? MobEffects.HUNGER : MobEffects.NAUSEA, ticks, 0);
-                out.add(new ApplyStatusEffectsConsumeEffect(penalty, 1.0f));
-            }
+            addRolledEffects(out, MIQConfig.DONT_WANT_PENALTY_EFFECTS.get(), rng);
         }
         return out;
+    }
+
+    /**
+     * One weighted entry of {@code [ [ {id,time,lvl}, ... ], weight ]} inside the effect table.
+     * 效果表中的一个带权重的分组：{@code [ [ {id,time,lvl}, ... ], 权重 ]}。
+     */
+    private record EffectOption(int weight, List<ConfigEffect> effects) {
+    }
+
+    /** A single configured effect: registry id, duration in ticks, level (1 = level I). */
+    private record ConfigEffect(String id, int timeTicks, int level) {
+    }
+
+    private static void addRolledEffects(List<ConsumeEffect> out, String tableJson, RandomSource rng) {
+        List<MobEffectInstance> rolled = rollTableEffects(tableJson, rng);
+        if (!rolled.isEmpty()) {
+            out.add(new ApplyStatusEffectsConsumeEffect(rolled, 1.0f));
+        }
+    }
+
+    /**
+     * Parses an effect table and rolls one weighted option, resolving each effect's registry id to a
+     * {@link MobEffect} (amplifier = level - 1). Unknown / missing effect types only log a WARN and are
+     * skipped so the game never crashes on a bad config. An empty effect array yields an empty list.
+     * Returns {@link List#of()} when the table is malformed.
+     */
+    private static List<MobEffectInstance> rollTableEffects(String tableJson, RandomSource rng) {
+        if (tableJson == null || tableJson.isBlank()) {
+            return List.of();
+        }
+        JsonElement root;
+        try {
+            root = JsonParser.parseString(tableJson);
+        } catch (JsonSyntaxException e) {
+            LOGGER.warn("[MIQ] Malformed effect table, ignoring: {}", e.getMessage());
+            return List.of();
+        }
+        if (!root.isJsonArray()) {
+            LOGGER.warn("[MIQ] Effect table must be a JSON array: {}", tableJson);
+            return List.of();
+        }
+
+        List<EffectOption> options = new ArrayList<>();
+        int totalWeight = 0;
+        for (JsonElement optEl : root.getAsJsonArray()) {
+            if (!optEl.isJsonArray() || optEl.getAsJsonArray().size() != 2) {
+                LOGGER.warn("[MIQ] Effect table option must be [ [ {id,time,lvl}, ... ], weight ], got: {}", optEl);
+                continue;
+            }
+            JsonArray pair = optEl.getAsJsonArray();
+            try {
+                JsonArray effectArr = pair.get(0).getAsJsonArray();
+                int weight = pair.get(1).getAsInt();
+                if (weight <= 0) {
+                    continue; // zero/negative weight never rolled. 权重 <=0 的选项不会被抽中。
+                }
+                options.add(new EffectOption(weight, parseEffects(effectArr)));
+                totalWeight += weight;
+            } catch (IllegalStateException | UnsupportedOperationException e) {
+                LOGGER.warn("[MIQ] Invalid effect table entry, skipped: {}", optEl);
+            }
+        }
+        if (options.isEmpty() || totalWeight <= 0) {
+            return List.of();
+        }
+
+        // Weighted random pick. 按权重随机抽取一组。
+        int roll = rng.nextInt(totalWeight);
+        int acc = 0;
+        for (EffectOption option : options) {
+            acc += option.weight();
+            if (roll < acc) {
+                return resolveEffects(option.effects());
+            }
+        }
+        return List.of();
+    }
+
+    /** Parses the array of {@code {id,time,lvl}} objects inside one option. */
+    private static List<ConfigEffect> parseEffects(JsonArray effectArr) {
+        List<ConfigEffect> effects = new ArrayList<>(effectArr.size());
+        for (JsonElement el : effectArr) {
+            if (!el.isJsonObject()) {
+                LOGGER.warn("[MIQ] Effect entry must be an object {id,time,lvl}, got: {}", el);
+                continue;
+            }
+            JsonObject obj = el.getAsJsonObject();
+            String id = obj.has("id") ? obj.get("id").getAsString() : null;
+            int time = obj.has("time") ? obj.get("time").getAsInt() : 0;
+            int level = obj.has("lvl") ? obj.get("lvl").getAsInt() : 1;
+            if (id != null && !id.isBlank()) {
+                effects.add(new ConfigEffect(id, Math.max(0, time), Math.max(1, level)));
+            }
+        }
+        return effects;
+    }
+
+    /** Resolves each configured effect to a real {@link MobEffectInstance}; unknowns log a WARN. */
+    private static List<MobEffectInstance> resolveEffects(List<ConfigEffect> configured) {
+        List<MobEffectInstance> instances = new ArrayList<>(configured.size());
+        for (ConfigEffect c : configured) {
+            Identifier id = Identifier.tryParse(c.id());
+            if (id == null) {
+                LOGGER.warn("[MIQ] Malformed effect id '{}' in effect table, skipped.", c.id());
+                continue;
+            }
+            MobEffect effect = BuiltInRegistries.MOB_EFFECT.getValue(id);
+            if (effect == null) {
+                LOGGER.warn("[MIQ] Unknown/missing effect '{}' in effect table, skipped.", c.id());
+                continue;
+            }
+            instances.add(new MobEffectInstance(BuiltInRegistries.MOB_EFFECT.wrapAsHolder(effect),
+                    c.timeTicks(), Math.max(0, c.level() - 1)));
+        }
+        return instances;
     }
 }

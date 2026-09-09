@@ -72,19 +72,30 @@ public final class MIQConfig {
             .defineInRange("effectDurationBoost", 0.25, 0.0, 10.0);
 
     /**
-     * Whether to grant the extra Luck effect. 是否启用额外的幸运效果。
+     * Reward effect roll-table, given when eating a 'very want' food.
+     *
+     * <p>Format (JSON, a single-line string): a weighted list of options, each being
+     * {@code [ [ {id,time,lvl}, ... ], weight ]}. One option is chosen at random using its weight;
+     * then every listed effect is applied with that id/ticks/level. An empty effect array means
+     * "no effect". {@code minecraft:luck}, {@code time:1200} (=60 s), {@code lvl:1}.
+     * An unknown effect id only logs a WARN and is skipped.
+     *
+     * <p>奖励效果表：食用“今天很想吃”的食物时按权重随机抽取一项效果组并施加。
+     * 格式为一个 JSON 字符串，每一组为 {@code [ [ {id,time,lvl}, ... ], 权重 ]}，
+     * 效果组数组可为空（表示不施加任何效果）。{id} 为效果注册名、{time} 为持续 tick 数、
+     * {lvl} 为效果等级（1 表示 1 级）。未知效果 id 仅输出 WARN 日志并跳过，不会导致崩溃。
      */
-    public static final ModConfigSpec.BooleanValue VERY_WANT_EXTRA_LUCK = BUILDER
-            .comment("Whether eating a 'very want' food also grants the extra Luck effect.",
-                    "/ 是否启用额外幸运效果（食用“很想吃”食物时额外获得幸运）。")
-            .define("extraLuck", true);
-
-    /**
-     * Duration of the extra Luck effect, in seconds. 额外幸运效果的时长（秒）。
-     */
-    public static final ModConfigSpec.IntValue VERY_WANT_LUCK_DURATION_SECONDS = BUILDER
-            .comment("Duration of the extra Luck effect in seconds. / 额外幸运效果的持续时长（秒）。")
-            .defineInRange("luckDurationSeconds", 60, 1, 100000);
+    public static final ModConfigSpec.ConfigValue<String> REWARD_EFFECTS = BUILDER
+            .comment(
+                    "Reward effect roll-table, applied when eating a 'very want' food. JSON string.",
+                    "Format: [[ [ {id,time,lvl}, ... ], weight ], ...] — one option is picked by weight;",
+                    "then every effect in it is applied. Empty effect array = no effect.",
+                    "time is in ticks, lvl is the level (1 = level I). Unknown effect ids log a WARN.",
+                    "Default always grants Luck I for 1200 ticks (60 s).",
+                    "/ 奖励效果表：配置见类注释。默认 100% 给予 60 秒幸运 I（minecraft:luck, time:1200, lvl:1）。")
+            .define("rewardEffects",
+                    "[[[{\"id\":\"minecraft:luck\",\"time\":1200,\"lvl\":1}],1]]",
+                    obj -> obj instanceof String);
 
     static {
         BUILDER.pop();
@@ -126,27 +137,23 @@ public final class MIQConfig {
             .defineInRange("effectDurationReduce", 0.25, 0.0, 1.0);
 
     /**
-     * Chance to get the negative effect (hunger or nausea) when eating 'don't want' food.
-     * 食用“不想吃”食物时触发负面效果（饥饿或反胃）的概率。
+     * Penalty effect roll-table, given when eating a 'don't want' food (only while the penalty is enabled).
+     *
+     * <p>Same format as {@link #REWARD_EFFECTS}. Default: weight 1 = Hunger I for 60 ticks,
+     * weight 1 = Nausea I for 60 ticks, weight 38 = nothing (so 1/40 = 2.5% each).
      */
-    public static final ModConfigSpec.DoubleValue DONT_WANT_PENALTY_EFFECT_CHANCE = BUILDER
-            .comment("Chance (0.05 = 5%) to gain Hunger I or Nausea I for a short time when eating 'don't want' food.",
-                    "/ 食用“不想吃”食物时，有该概率（0.05 表示 5%）获得短暂的饥饿或反胃效果。")
-            .defineInRange("penaltyEffectChance", 0.05, 0.0, 1.0);
-
-    /**
-     * Duration of the granted Hunger effect, in seconds. 获得饥饿效果的时长（秒）。
-     */
-    public static final ModConfigSpec.IntValue DONT_WANT_HUNGER_DURATION_SECONDS = BUILDER
-            .comment("Duration of the granted Hunger I effect in seconds. / 获得饥饿 I 效果的时长（秒）。")
-            .defineInRange("hungerDurationSeconds", 3, 1, 100000);
-
-    /**
-     * Duration of the granted Nausea effect, in seconds. 获得反胃效果的时长（秒）。
-     */
-    public static final ModConfigSpec.IntValue DONT_WANT_NAUSEA_DURATION_SECONDS = BUILDER
-            .comment("Duration of the granted Nausea I effect in seconds. / 获得反胃 I 效果的时长（秒）。")
-            .defineInRange("nauseaDurationSeconds", 3, 1, 100000);
+    public static final ModConfigSpec.ConfigValue<String> DONT_WANT_PENALTY_EFFECTS = BUILDER
+            .comment(
+                    "Penalty effect roll-table, applied when eating a 'don't want' food. JSON string.",
+                    "Same format as rewardEffects. Empty effect array = no effect.",
+                    "Unknown effect ids log a WARN and are skipped.",
+                    "Default: Hunger I 60 ticks (w1), Nausea I 60 ticks (w1), nothing (w38) → 2.5% each.",
+                    "/ 惩罚效果表：格式同奖励效果表。默认 2.5% 概率给予 3 秒饥饿 I、2.5% 概率给予 3 秒反胃 I、其余无效果。")
+            .define("penaltyEffects",
+                    "[[[{\"id\":\"minecraft:hunger\",\"time\":60,\"lvl\":1}],1],"
+                            + "[[{\"id\":\"minecraft:nausea\",\"time\":60,\"lvl\":1}],1],"
+                            + "[[],38]]",
+                    obj -> obj instanceof String);
 
     static {
         BUILDER.pop();
