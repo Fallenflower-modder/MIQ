@@ -2,6 +2,8 @@ package com.cloversecho.miq.recipe;
 
 import com.cloversecho.miq.config.MIQConfig;
 import com.cloversecho.miq.network.RecipeSyncPayload;
+import com.google.gson.Gson;
+import net.minecraft.core.Holder;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.contents.TranslatableContents;
@@ -10,14 +12,16 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.effect.MobEffectInstance;
-import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.food.FoodProperties;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.neoforged.neoforge.network.PacketDistributor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -32,6 +36,12 @@ import java.util.Map;
  * 并把食谱同步给客户端（用于 Tooltip），同时在食谱变化时向所有玩家发送聊天提示。
  */
 public final class DailyRecipeManager {
+
+    /** Logger for warnings about malformed or unknown config entries. 用于输出配置格式/未知效果警告的日志器。 */
+    private static final Logger LOGGER = LoggerFactory.getLogger(DailyRecipeManager.class);
+
+    /** Used to parse the JSON effect tables (rewardEffects / penaltyEffects). 用于解析 JSON 格式的效果表。 */
+    private static final Gson GSON = new Gson();
 
     /** The currently active recipe, shared by the logical server and the client. 当前生效的每日食谱。 */
     private static volatile Map<Item, DesireCategory> currentRecipe = Map.of();
@@ -379,11 +389,11 @@ public final class DailyRecipeManager {
 
     /**
      * Builds a modified {@link FoodProperties} applying hunger/saturation/effect scaling,
-     * plus the extra Luck (very-want) or the chance-based Hunger/Nausea (don't-want).
+     * plus one weighted-rolled effect group for the category (rewardEffects / penaltyEffects).
      * If the item is not part of the recipe, the original properties are returned unchanged.
      *
      * 根据欲望分类生成调整后的 FoodProperties：用同一缩放因子同时缩放饱食度恢复与饱和度，
-     * 缩放食物自带效果时长，并在“很想吃”时附加幸运效果、在“不想吃”时以一定概率附加饥饿/反胃。
+     * 缩放食物自带效果时长，并按 rewardEffects / penaltyEffects 加权效果表附加一组效果。
      */
     public static FoodProperties buildModifiedFoodProperties(FoodProperties base, Player player, ItemStack stack) {
         // Tally the eaten food (server-side only) for the next refresh's weight shift.
@@ -395,8 +405,6 @@ public final class DailyRecipeManager {
             return base;
         }
 
-        RandomSource rng = player.getRandom();
-
         if (cat == DesireCategory.VERY_WANT) {
             // One shared factor scales both hunger-restore and saturation.
             float scale = 1.0f + (float) (double) MIQConfig.VERY_WANT_HUNGER_BOOST.get();
@@ -404,11 +412,7 @@ public final class DailyRecipeManager {
             float saturation = Math.max(0.0f, base.saturation() * scale);
             float durFactor = 1.0f + (float) (double) MIQConfig.VERY_WANT_EFFECT_DURATION_BOOST.get();
             List<FoodProperties.PossibleEffect> effects = scaleEffectDurations(base.effects(), durFactor);
-            if (MIQConfig.VERY_WANT_EXTRA_LUCK.get()) {
-                effects.add(new FoodProperties.PossibleEffect(() -> new MobEffectInstance(
-                        MobEffects.LUCK,
-                        MIQConfig.VERY_WANT_LUCK_DURATION_SECONDS.get() * 20, 0), 1.0f));
-            }
+            rollEffectTable(player, MIQConfig.REWARD_EFFECTS.get(), "desireReward.rewardEffects", effects);
             return new FoodProperties(nutrition, saturation, base.canAlwaysEat(), base.eatSeconds(),
                     base.usingConvertsTo(), effects);
         }
@@ -423,14 +427,7 @@ public final class DailyRecipeManager {
         float saturation = Math.max(0.0f, base.saturation() * scale);
         float durFactor = Math.max(0.0f, 1.0f - (float) (double) MIQConfig.DONT_WANT_EFFECT_DURATION_REDUCE.get());
         List<FoodProperties.PossibleEffect> effects = scaleEffectDurations(base.effects(), durFactor);
-        if (rng.nextFloat() < MIQConfig.DONT_WANT_PENALTY_EFFECT_CHANCE.get()) {
-            boolean hunger = rng.nextBoolean();
-            int ticks = (hunger
-                    ? MIQConfig.DONT_WANT_HUNGER_DURATION_SECONDS.get()
-                    : MIQConfig.DONT_WANT_NAUSEA_DURATION_SECONDS.get()) * 20;
-            MobEffectInstance penalty = new MobEffectInstance(hunger ? MobEffects.HUNGER : MobEffects.CONFUSION, ticks, 0);
-            effects.add(new FoodProperties.PossibleEffect(() -> new MobEffectInstance(penalty), 1.0f));
-        }
+        rollEffectTable(player, MIQConfig.PENALTY_EFFECTS.get(), "desirePenalty.penaltyEffects", effects);
         return new FoodProperties(nutrition, saturation, base.canAlwaysEat(), base.eatSeconds(),
                 base.usingConvertsTo(), effects);
     }
@@ -449,5 +446,104 @@ public final class DailyRecipeManager {
             out.add(new FoodProperties.PossibleEffect(() -> new MobEffectInstance(scaled), possible.probability()));
         }
         return out;
+    }
+
+    // ------------------------------------------------------------------
+    // Weighted effect tables / 加权效果表（rewardEffects / penaltyEffects）
+    // ------------------------------------------------------------------
+
+    /** A single parsed effect entry of a weighted effect table. 加权效果表中的一条已解析效果。 */
+    private record EffectSpec(Holder<MobEffect> effect, int ticks, int level) {
+    }
+
+    /** A weighted group of effects; an empty effect list means "apply nothing". 一组带权重的效果；空列表表示不施加任何效果。 */
+    private record EffectGroup(int weight, List<EffectSpec> effects) {
+    }
+
+    /**
+     * Rolls the configured weighted effect table once, then appends the chosen effects to {@code out}
+     * as deterministic food effects (probability 1.0). The table is a JSON string; malformed JSON,
+     * malformed entries or unknown effect ids are handled gracefully with a WARN log line, never a crash.
+     *
+     * 按配置权重随机选出一组效果，并把选中组内的效果以 1.0 概率追加到 {@code out}。
+     * 效果表为 JSON 字符串；JSON 格式错误、条目格式错误或未知的效果 ID 都只输出 WARN 日志，
+     * 不会导致游戏崩溃。
+     */
+    private static void rollEffectTable(Player player, String json, String optionName,
+                                        List<FoodProperties.PossibleEffect> out) {
+        if (json == null || json.isBlank()) {
+            return;
+        }
+        List<?> rawTable;
+        try {
+            rawTable = GSON.fromJson(json, List.class);
+        } catch (RuntimeException ex) {
+            LOGGER.warn("[MIQ] Invalid JSON for {}: {} ({})", optionName, json, ex.getMessage());
+            return;
+        }
+        if (rawTable == null || rawTable.isEmpty()) {
+            return;
+        }
+        List<EffectGroup> groups = parseEffectTable(rawTable, optionName);
+        int total = 0;
+        for (EffectGroup group : groups) {
+            total += Math.max(0, group.weight());
+        }
+        if (total <= 0) {
+            return; // no positive weight: nothing can be selected. 没有正权重：不会选中任何效果。
+        }
+        int roll = player.getRandom().nextInt(total);
+        for (EffectGroup group : groups) {
+            roll -= Math.max(0, group.weight());
+            if (roll < 0) {
+                for (EffectSpec spec : group.effects()) {
+                    // 'level' is the in-game effect level (1 = amplifier 0).
+                    // lvl 为游戏内效果等级（1 级对应 amplifier 0）。
+                    MobEffectInstance instance = new MobEffectInstance(
+                            spec.effect(), spec.ticks(), Math.max(0, spec.level() - 1));
+                    out.add(new FoodProperties.PossibleEffect(() -> new MobEffectInstance(instance), 1.0f));
+                }
+                return;
+            }
+        }
+    }
+
+    /**
+     * Parses the raw config value into {@link EffectGroup}s, warning on malformed entries.
+     * 把配置值解析为 EffectGroup 列表，遇到格式错误时输出警告。
+     */
+    private static List<EffectGroup> parseEffectTable(List<?> rawTable, String optionName) {
+        List<EffectGroup> groups = new ArrayList<>();
+        for (Object entry : rawTable) {
+            if (!(entry instanceof List<?> pair) || pair.size() != 2
+                    || !(pair.get(0) instanceof List<?> specs) || !(pair.get(1) instanceof Number weight)) {
+                LOGGER.warn("[MIQ] Invalid effect-table entry in {}: {}", optionName, entry);
+                continue;
+            }
+            List<EffectSpec> parsed = new ArrayList<>();
+            for (Object specObj : specs) {
+                if (!(specObj instanceof Map<?, ?> spec)) {
+                    LOGGER.warn("[MIQ] Invalid effect spec in {}: {}", optionName, specObj);
+                    continue;
+                }
+                Object id = spec.get("id");
+                Object time = spec.get("time");
+                Object lvl = spec.get("lvl");
+                if (!(id instanceof String idStr) || !(time instanceof Number timeNum) || !(lvl instanceof Number lvlNum)) {
+                    LOGGER.warn("[MIQ] Effect spec in {} is missing id/time/lvl: {}", optionName, spec);
+                    continue;
+                }
+                ResourceLocation loc = ResourceLocation.tryParse(idStr);
+                Holder<MobEffect> effect = loc == null ? null
+                        : BuiltInRegistries.MOB_EFFECT.getHolder(loc).orElse(null);
+                if (effect == null) {
+                    LOGGER.warn("[MIQ] Unknown effect '{}' in {}; skipped", idStr, optionName);
+                    continue;
+                }
+                parsed.add(new EffectSpec(effect, timeNum.intValue(), lvlNum.intValue()));
+            }
+            groups.add(new EffectGroup(weight.intValue(), parsed));
+        }
+        return groups;
     }
 }

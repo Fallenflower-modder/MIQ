@@ -72,19 +72,37 @@ public final class MIQConfig {
             .defineInRange("effectDurationBoost", 0.25, 0.0, 10.0);
 
     /**
-     * Whether to grant the extra Luck effect. 是否启用额外的幸运效果。
+     * Default reward effect table: 100% Luck I for 1200 ticks (60 s).
+     * 默认奖励效果表：100% 幸运 I（1200 刻 = 60 秒）。
      */
-    public static final ModConfigSpec.BooleanValue VERY_WANT_EXTRA_LUCK = BUILDER
-            .comment("Whether eating a 'very want' food also grants the extra Luck effect.",
-                    "/ 是否启用额外幸运效果（食用“很想吃”食物时额外获得幸运）。")
-            .define("extraLuck", true);
+    private static final String DEFAULT_REWARD_EFFECTS =
+            "[[[{\"id\":\"minecraft:luck\",\"time\":1200,\"lvl\":1}],1]]";
 
     /**
-     * Duration of the extra Luck effect, in seconds. 额外幸运效果的时长（秒）。
+     * Weighted effect table granted when eating a 'very want' food, as a JSON string.
+     * Format: [[[{"id":"effectId","time":ticks,"lvl":level},...],weight],...]
+     * One entry is rolled by weight, then every effect in that entry is applied.
+     * An empty effects array [] means no effect is applied. time is in ticks (20 ticks = 1 second).
+     * Unknown effect ids only produce a WARN log line, never a crash.
+     *
+     * 奖励效果表（JSON 字符串）：食用“很想吃”食物时按权重随机施加的一组效果。
+     * 格式：[[[{"id":"效果ID","time":刻数,"lvl":等级},...],权重],...]
+     * 按权重随机选出一组，施加该组内所有效果；空数组 [] 表示不施加任何效果。
+     * time 单位为刻（20 刻 = 1 秒）。未知的效果 ID 只输出 WARN 日志，不会导致游戏崩溃。
+     * 示例：rewardEffects = '[[[{"id":"minecraft:luck","time":1200,"lvl":1}],1]]'
      */
-    public static final ModConfigSpec.IntValue VERY_WANT_LUCK_DURATION_SECONDS = BUILDER
-            .comment("Duration of the extra Luck effect in seconds. / 额外幸运效果的持续时长（秒）。")
-            .defineInRange("luckDurationSeconds", 60, 1, 100000);
+    public static final ModConfigSpec.ConfigValue<String> REWARD_EFFECTS = BUILDER
+            .comment("Weighted effect table granted when eating a 'very want' food, as a JSON string.",
+                    "Format: [[[{\"id\":\"effectId\",\"time\":ticks,\"lvl\":level},...],weight],...].",
+                    "One entry is rolled by its weight; all effects in the chosen entry are applied.",
+                    "An empty effects array [] grants nothing. 'time' is in ticks (20 ticks = 1 second).",
+                    "Default grants Luck I for 1200 ticks (60 s) with weight 1.",
+                    "奖励效果表（JSON 字符串）：食用“很想吃”食物时按权重随机施加的一组效果。",
+                    "格式：[[[{\"id\":\"效果ID\",\"time\":刻数,\"lvl\":等级},...],权重],...]。",
+                    "按权重随机选出一组并施加其中所有效果；空数组 [] 表示不施加任何效果。",
+                    "time 单位为刻（20 刻 = 1 秒）。默认：权重 1，给予 1200 刻（60 秒）幸运 I。",
+                    "示例：rewardEffects = '[[[{\"id\":\"minecraft:luck\",\"time\":1200,\"lvl\":1}],1]]'")
+            .define("rewardEffects", DEFAULT_REWARD_EFFECTS);
 
     static {
         BUILDER.pop();
@@ -126,27 +144,36 @@ public final class MIQConfig {
             .defineInRange("effectDurationReduce", 0.25, 0.0, 1.0);
 
     /**
-     * Chance to get the negative effect (hunger or nausea) when eating 'don't want' food.
-     * 食用“不想吃”食物时触发负面效果（饥饿或反胃）的概率。
+     * Default penalty effect table: 1/40 Hunger I, 1/40 Nausea I, 38/40 nothing.
+     * 默认惩罚效果表：1/40 概率饥饿 I、1/40 概率反胃 I、38/40 概率无效果。
      */
-    public static final ModConfigSpec.DoubleValue DONT_WANT_PENALTY_EFFECT_CHANCE = BUILDER
-            .comment("Chance (0.05 = 5%) to gain Hunger I or Nausea I for a short time when eating 'don't want' food.",
-                    "/ 食用“不想吃”食物时，有该概率（0.05 表示 5%）获得短暂的饥饿或反胃效果。")
-            .defineInRange("penaltyEffectChance", 0.05, 0.0, 1.0);
+    private static final String DEFAULT_PENALTY_EFFECTS =
+            "[[[{\"id\":\"minecraft:hunger\",\"time\":60,\"lvl\":1}],1],"
+            + "[[{\"id\":\"minecraft:nausea\",\"time\":60,\"lvl\":1}],1],"
+            + "[[],38]]";
 
     /**
-     * Duration of the granted Hunger effect, in seconds. 获得饥饿效果的时长（秒）。
+     * Weighted effect table granted when eating a 'don't want' food, as a JSON string.
+     * Same format and rules as rewardEffects; the last entry usually is an empty effects array [].
+     * Unknown effect ids only produce a WARN log line, never a crash.
+     *
+     * 惩罚效果表（JSON 字符串）：食用“不想吃”食物时按权重随机施加的一组效果。
+     * 格式与 rewardEffects 相同；通常最后一个条目为空数组 [] 表示“无效果”。
+     * 未知的效果 ID 只输出 WARN 日志，不会导致游戏崩溃。
+     * 示例：penaltyEffects = '[[[{"id":"minecraft:hunger","time":60,"lvl":1}],1],[[{"id":"minecraft:nausea","time":60,"lvl":1}],1],[[],38]]'
      */
-    public static final ModConfigSpec.IntValue DONT_WANT_HUNGER_DURATION_SECONDS = BUILDER
-            .comment("Duration of the granted Hunger I effect in seconds. / 获得饥饿 I 效果的时长（秒）。")
-            .defineInRange("hungerDurationSeconds", 3, 1, 100000);
-
-    /**
-     * Duration of the granted Nausea effect, in seconds. 获得反胃效果的时长（秒）。
-     */
-    public static final ModConfigSpec.IntValue DONT_WANT_NAUSEA_DURATION_SECONDS = BUILDER
-            .comment("Duration of the granted Nausea I effect in seconds. / 获得反胃 I 效果的时长（秒）。")
-            .defineInRange("nauseaDurationSeconds", 3, 1, 100000);
+    public static final ModConfigSpec.ConfigValue<String> PENALTY_EFFECTS = BUILDER
+            .comment("Weighted effect table granted when eating a 'don't want' food, as a JSON string.",
+                    "Format: [[[{\"id\":\"effectId\",\"time\":ticks,\"lvl\":level},...],weight],...].",
+                    "One entry is rolled by its weight; all effects in the chosen entry are applied.",
+                    "An empty effects array [] grants nothing. 'time' is in ticks (20 ticks = 1 second).",
+                    "Default: 1/40 Hunger I (60 ticks), 1/40 Nausea I (60 ticks), 38/40 nothing.",
+                    "惩罚效果表（JSON 字符串）：食用“不想吃”食物时按权重随机施加的一组效果。",
+                    "格式：[[[{\"id\":\"效果ID\",\"time\":刻数,\"lvl\":等级},...],权重],...]。",
+                    "按权重随机选出一组并施加其中所有效果；空数组 [] 表示不施加任何效果。",
+                    "time 单位为刻（20 刻 = 1 秒）。默认：1/40 概率饥饿 I（60 刻）、1/40 概率反胃 I（60 刻）、38/40 无效果。",
+                    "示例：penaltyEffects = '[[[{\"id\":\"minecraft:hunger\",\"time\":60,\"lvl\":1}],1],[[{\"id\":\"minecraft:nausea\",\"time\":60,\"lvl\":1}],1],[[],38]]'")
+            .define("penaltyEffects", DEFAULT_PENALTY_EFFECTS);
 
     static {
         BUILDER.pop();
