@@ -1,0 +1,34 @@
+modLoader="javafml"
+loaderVersion="${loader_version_range}"
+license="GPLv3"
+
+[[mods]]
+modId="miq"
+version="${mod_version}"
+displayName="Most Important Question"
+authors="Clovers_Echo"
+description='''What's to eat today?'''
+
+[[mixins]]
+config="miq.mixins.json"
+
+[[dependencies.${mod_id}]]
+modId="neoforge"
+type="required"
+versionRange="${neo_version_range}"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.${mod_id}]]
+modId="minecraft"
+type="required"
+versionRange="${minecraft_version_range}"
+ordering="NONE"
+side="BOTH"
+
+# Optional AppleSkin integration (food-value tooltip/HUD compatibility).
+[[dependencies.${mod_id}]]
+modId="appleskin"
+type="optional"
+ordering="NONE"
+side="CLIENT"
