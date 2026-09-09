@@ -1,0 +1,15 @@
+{
+    "minVersion": "0.8",
+    "package": "com.cloversecho.miq.mixin",
+    "compatibilityLevel": "JAVA_17",
+    "refmap": "miq.refmap.json",
+    "verbose": true,
+    "mixins": [
+        "PlayerEatMixin",
+        "FoodDataEatMixin",
+        "LivingEntityEatMixin"
+    ],
+    "injectors": {
+        "defaultRequire": 1
+    }
+}

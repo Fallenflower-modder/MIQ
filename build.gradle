@@ -1,12 +1,19 @@
 plugins {
     id 'java-library'
-    id 'net.neoforged.moddev'
+    id 'net.minecraftforge.gradle'
+    id 'org.spongepowered.mixin'
 }
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(21)
+        languageVersion = JavaLanguageVersion.of(17)
     }
+}
+
+// Source files are UTF-8 (Chinese comments); javac otherwise defaults to the
+// system charset (GBK on Windows) and fails with "unmappable character" errors.
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
 }
 
 version = mod_version
@@ -16,25 +23,40 @@ base {
     archivesName = mod_id
 }
 
-neoForge {
-    version = neo_version
+minecraft {
+    mappings channel: 'official', version: minecraft_version
 
     runs {
         client {
-            client()
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            mods {
+                "${mod_id}" {
+                    source sourceSets.main
+                }
+            }
         }
         server {
-            server()
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            mods {
+                "${mod_id}" {
+                    source sourceSets.main
+                }
+            }
         }
         data {
-            data()
-            programArguments = ['--all', '--mod', project.mod_id, '--output', file('src/generated/resources/').absolutePath, '--existing', file('src/main/resources/').absolutePath]
-        }
-    }
-
-    mods {
-        "${mod_id}" {
-            sourceSet sourceSets.main
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            args '--mod', mod_id, '--all', '--output', file('src/generated/resources/').absolutePath, '--existing', file('src/main/resources/').absolutePath
+            mods {
+                "${mod_id}" {
+                    source sourceSets.main
+                }
+            }
         }
     }
 }
@@ -42,28 +64,33 @@ neoForge {
 sourceSets.main.resources { srcDir 'src/generated/resources' }
 
 repositories {
-    maven {
-        // Reachable mirror of maven.neoforged.net (the original is blocked in some regions).
-        name = 'NeoForged'
-        url = 'https://neoforged.forgecdn.net/releases'
-    }
     mavenCentral()
 }
 
 dependencies {
+    minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+
     // Mixin is needed on the compile classpath for the @Mixin/@Inject/@ModifyVariable annotations.
-    compileOnly 'org.spongepowered:mixin:0.8.7'
+    compileOnly 'org.spongepowered:mixin:0.8.5'
+    annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
 
     // AppleSkin API, used only for the optional FoodValuesEvent compat (never bundled at runtime).
-    compileOnly files('ReferenceProject/[苹果皮] appleskin-neoforge-mc1.21-3.0.9.jar')
+    // Passing a File object (not a glob-parseable String) is required because the jar name
+    // contains '[' / ']' which files() would otherwise interpret as glob syntax.
+    compileOnly files(file('ReferenceProject/[苹果皮] appleskin-forge-mc1.20.1-2.5.1.jar'))
+}
+
+mixin {
+    add sourceSets.main, 'miq.refmap.json'
+    config 'miq.mixins.json'
 }
 
 tasks.withType(ProcessResources).configureEach {
     var replaceProperties = [
             minecraft_version      : minecraft_version,
             minecraft_version_range: minecraft_version_range,
-            neo_version            : neo_version,
-            neo_version_range      : neo_version_range,
+            forge_version          : forge_version,
+            forge_version_range    : forge_version_range,
             loader_version_range   : loader_version_range,
             mod_id                 : mod_id,
             mod_name               : mod_name,
@@ -74,7 +101,22 @@ tasks.withType(ProcessResources).configureEach {
     ]
     inputs.properties replaceProperties
 
-    filesMatching(['META-INF/neoforge.mods.toml']) {
+    filesMatching(['META-INF/mods.toml']) {
         expand replaceProperties
+    }
+}
+
+jar {
+    manifest {
+        attributes([
+                'Specification-Title'     : mod_id,
+                'Specification-Vendor'    : mod_authors,
+                'Specification-Version'   : '1',
+                'Implementation-Title'    : project.name,
+                'Implementation-Version'  : project.jar.archiveVersion,
+                'Implementation-Vendor'   : mod_authors,
+                'Implementation-Timestamp': new Date().format("yyyy-MM-dd'T'HH:mm:ssZ"),
+                'MixinConfigs'            : 'miq.mixins.json'
+        ])
     }
 }
