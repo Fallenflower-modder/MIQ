@@ -3,7 +3,12 @@ package com.cloversecho.miq.recipe;
 import com.cloversecho.miq.config.MIQConfig;
 import com.cloversecho.miq.network.MIQNetwork;
 import com.cloversecho.miq.network.RecipeSyncPayload;
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.mojang.datafixers.util.Pair;
+import com.mojang.logging.LogUtils;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.contents.TranslatableContents;
@@ -12,13 +17,14 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.effect.MobEffectInstance;
-import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.food.FoodProperties;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import org.slf4j.Logger;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -33,6 +39,9 @@ import java.util.Map;
  * 并把食谱同步给客户端（用于 Tooltip），同时在食谱变化时向所有玩家发送聊天提示。
  */
 public final class DailyRecipeManager {
+
+    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final Gson GSON = new Gson();
 
     /** The currently active recipe, shared by the logical server and the client. 当前生效的每日食谱。 */
     private static volatile Map<Item, DesireCategory> currentRecipe = Map.of();
@@ -405,11 +414,7 @@ public final class DailyRecipeManager {
             float saturation = Math.max(0.0f, base.getSaturationModifier() * scale);
             float durFactor = 1.0f + (float) (double) MIQConfig.VERY_WANT_EFFECT_DURATION_BOOST.get();
             List<Pair<MobEffectInstance, Float>> effects = scaleEffectDurations(base.getEffects(), durFactor);
-            if (MIQConfig.VERY_WANT_EXTRA_LUCK.get()) {
-                effects.add(Pair.of(new MobEffectInstance(
-                        MobEffects.LUCK,
-                        MIQConfig.VERY_WANT_LUCK_DURATION_SECONDS.get() * 20, 0), 1.0f));
-            }
+            effects.addAll(rollEffectTable(MIQConfig.VERY_WANT_EFFECT_TABLE.get(), rng));
             return buildScaled(base, nutrition, saturation, effects);
         }
 
@@ -423,15 +428,104 @@ public final class DailyRecipeManager {
         float saturation = Math.max(0.0f, base.getSaturationModifier() * scale);
         float durFactor = Math.max(0.0f, 1.0f - (float) (double) MIQConfig.DONT_WANT_EFFECT_DURATION_REDUCE.get());
         List<Pair<MobEffectInstance, Float>> effects = scaleEffectDurations(base.getEffects(), durFactor);
-        if (rng.nextFloat() < MIQConfig.DONT_WANT_PENALTY_EFFECT_CHANCE.get()) {
-            boolean hunger = rng.nextBoolean();
-            int ticks = (hunger
-                    ? MIQConfig.DONT_WANT_HUNGER_DURATION_SECONDS.get()
-                    : MIQConfig.DONT_WANT_NAUSEA_DURATION_SECONDS.get()) * 20;
-            MobEffectInstance penalty = new MobEffectInstance(hunger ? MobEffects.HUNGER : MobEffects.CONFUSION, ticks, 0);
-            effects.add(Pair.of(penalty, 1.0f));
-        }
+        effects.addAll(rollEffectTable(MIQConfig.DONT_WANT_EFFECT_TABLE.get(), rng));
         return buildScaled(base, nutrition, saturation, effects);
+    }
+
+    /**
+     * Parses the configured effect table (JSON array) and picks exactly one entry at random,
+     * weighted by each entry's weight. Every effect in the chosen entry's list is returned with
+     * probability 1.0 so the whole selected group is always applied. Malformed entries, unknown
+     * effect ids and invalid JSON never crash the game: each is reported once as a WARN and skipped.
+     *
+     * Format: [[[{"id":"<effect>","time":<ticks>,"lvl":<level>}, ...], <weight>], ...]
+     * An empty effect list ({@code []}) is valid and grants nothing.
+     *
+     * 解析配置中的效果表（JSON 数组），按各条目权重随机选中一组，并返回该组内的全部效果
+     * （概率固定为 1.0，即选中后必全部施加）。非法条目、未知效果 id 与非法 JSON 均不会导致
+     * 游戏崩溃，只会输出一行 WARN 警告并跳过。
+     * 格式：[[[{"id":"效果id","time":持续tick数,"lvl":等级}, ...], 权重], ...]
+     * 效果列表为 [] 表示不施加任何效果。
+     */
+    private static List<Pair<MobEffectInstance, Float>> rollEffectTable(String json, RandomSource rng) {
+        List<Pair<MobEffectInstance, Float>> out = new ArrayList<>();
+        if (json == null || json.isBlank()) {
+            return out;
+        }
+        JsonArray root;
+        try {
+            root = GSON.fromJson(json, JsonArray.class);
+        } catch (RuntimeException e) {
+            LOGGER.warn("[MIQ] Invalid effect table JSON, ignoring: {}", json);
+            return out;
+        }
+        if (root == null) {
+            return out;
+        }
+
+        // First pass: collect well-formed (effects, weight) entries with positive weight.
+        // 第一遍：收集格式正确且权重为正的条目。
+        List<JsonArray> tables = new ArrayList<>();
+        List<Integer> weights = new ArrayList<>();
+        long total = 0L;
+        for (JsonElement entryEl : root) {
+            if (!entryEl.isJsonArray() || entryEl.getAsJsonArray().size() < 2) {
+                LOGGER.warn("[MIQ] Malformed effect-table entry (expected [effectList, weight]), skipping: {}", entryEl);
+                continue;
+            }
+            JsonArray entry = entryEl.getAsJsonArray();
+            JsonElement effectsEl = entry.get(0);
+            JsonElement weightEl = entry.get(1);
+            if (!effectsEl.isJsonArray() || !weightEl.isJsonPrimitive() || !weightEl.getAsJsonPrimitive().isNumber()) {
+                LOGGER.warn("[MIQ] Malformed effect-table entry (expected [effectList, weight]), skipping: {}", entry);
+                continue;
+            }
+            int weight = weightEl.getAsInt();
+            if (weight <= 0) {
+                LOGGER.warn("[MIQ] Effect-table entry with non-positive weight is ignored: {}", entry);
+                continue;
+            }
+            tables.add(effectsEl.getAsJsonArray());
+            weights.add(weight);
+            total += weight;
+        }
+        if (total <= 0L) {
+            return out;
+        }
+
+        // Weighted pick, then apply every effect in the chosen group.
+        // 按权重随机选择一组，然后施加该组内所有效果。
+        double roll = rng.nextDouble() * total;
+        int chosen = tables.size() - 1;
+        for (int i = 0; i < weights.size(); i++) {
+            roll -= weights.get(i);
+            if (roll < 0.0d) {
+                chosen = i;
+                break;
+            }
+        }
+        for (JsonElement effectEl : tables.get(chosen)) {
+            if (!effectEl.isJsonObject()) {
+                LOGGER.warn("[MIQ] Malformed effect entry (expected {\"id\":...,\"time\":...,\"lvl\":...}), skipping: {}", effectEl);
+                continue;
+            }
+            JsonObject obj = effectEl.getAsJsonObject();
+            String id = obj.has("id") ? obj.get("id").getAsString() : "";
+            MobEffect effect = null;
+            ResourceLocation loc = ResourceLocation.tryParse(id);
+            if (loc != null) {
+                effect = BuiltInRegistries.MOB_EFFECT.get(loc);
+            }
+            if (effect == null) {
+                LOGGER.warn("[MIQ] Unknown effect id '{}' in effect table, skipped.", id);
+                continue;
+            }
+            int ticks = obj.has("time") ? Math.max(1, obj.get("time").getAsInt()) : 1;
+            int level = obj.has("lvl") ? Math.max(1, obj.get("lvl").getAsInt()) : 1;
+            int amplifier = level - 1;
+            out.add(Pair.of(new MobEffectInstance(effect, ticks, amplifier), 1.0f));
+        }
+        return out;
     }
 
     /** Builds a {@link FoodProperties} through its Builder (the 1.20.1 constructor is package-private).

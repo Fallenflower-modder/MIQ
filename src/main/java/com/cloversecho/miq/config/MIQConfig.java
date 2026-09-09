@@ -72,19 +72,27 @@ public final class MIQConfig {
             .defineInRange("effectDurationBoost", 0.25, 0.0, 10.0);
 
     /**
-     * Whether to grant the extra Luck effect. 是否启用额外的幸运效果。
+     * Effect table granted when eating a 'very want' food.
+     * 食用“很想吃”食物时给予的效果表配置（JSON 数组）。
      */
-    public static final ForgeConfigSpec.BooleanValue VERY_WANT_EXTRA_LUCK = BUILDER
-            .comment("Whether eating a 'very want' food also grants the extra Luck effect.",
-                    "/ 是否启用额外幸运效果（食用“很想吃”食物时额外获得幸运）。")
-            .define("extraLuck", true);
-
-    /**
-     * Duration of the extra Luck effect, in seconds. 额外幸运效果的时长（秒）。
-     */
-    public static final ForgeConfigSpec.IntValue VERY_WANT_LUCK_DURATION_SECONDS = BUILDER
-            .comment("Duration of the extra Luck effect in seconds. / 额外幸运效果的持续时长（秒）。")
-            .defineInRange("luckDurationSeconds", 60, 1, 100000);
+    public static final ForgeConfigSpec.ConfigValue<String> VERY_WANT_EFFECT_TABLE = BUILDER
+            .comment(
+                    "Effects granted when eating a 'very want' food. Format (JSON array, each entry",
+                    "is [effectList, weight]):",
+                    "[[[{\"id\":\"<effect>\",\"time\":<ticks>,\"lvl\":<level>}, ...], <weight>], ...]",
+                    "One entry is picked at random weighted by <weight>, then every effect in its list is",
+                    "applied. An empty effect list means no effect is granted. Unknown effect ids are",
+                    "skipped with a WARN instead of crashing. 'time' is in ticks (20 ticks = 1 second),",
+                    "'lvl' is the effect level (1 = level I).",
+                    "食用“很想吃”食物时给予的效果表（JSON 数组，每个元素为 [效果列表, 权重]）：",
+                    "[[[{\"id\":\"效果id\",\"time\":持续tick数,\"lvl\":等级}, ...], 权重], ...]",
+                    "按权重随机选择其中一组，然后对该组内每个效果分别施加；效果列表可留空表示不施加任何效果。",
+                    "遇到未知的效果 id 只会输出一行 WARN 警告并跳过，不会导致游戏崩溃。",
+                    "time 单位为 tick（20 tick = 1 秒），lvl 为效果等级（1 即效果等级 I）。",
+                    "默认：[[[{\"id\":\"minecraft:luck\",\"time\":1200,\"lvl\":1}],1]]（100% 施加 60 秒幸运 I）。")
+            .define("rewardEffects",
+                    "[[[{\"id\":\"minecraft:luck\",\"time\":1200,\"lvl\":1}],1]]",
+                    obj -> obj instanceof String);
 
     static {
         BUILDER.pop();
@@ -126,27 +134,24 @@ public final class MIQConfig {
             .defineInRange("effectDurationReduce", 0.25, 0.0, 1.0);
 
     /**
-     * Chance to get the negative effect (hunger or nausea) when eating 'don't want' food.
-     * 食用“不想吃”食物时触发负面效果（饥饿或反胃）的概率。
+     * Effect table granted when eating a 'don't want' food.
+     * 食用“不想吃”食物时给予的效果表配置（JSON 数组）。
      */
-    public static final ForgeConfigSpec.DoubleValue DONT_WANT_PENALTY_EFFECT_CHANCE = BUILDER
-            .comment("Chance (0.05 = 5%) to gain Hunger I or Nausea I for a short time when eating 'don't want' food.",
-                    "/ 食用“不想吃”食物时，有该概率（0.05 表示 5%）获得短暂的饥饿或反胃效果。")
-            .defineInRange("penaltyEffectChance", 0.05, 0.0, 1.0);
-
-    /**
-     * Duration of the granted Hunger effect, in seconds. 获得饥饿效果的时长（秒）。
-     */
-    public static final ForgeConfigSpec.IntValue DONT_WANT_HUNGER_DURATION_SECONDS = BUILDER
-            .comment("Duration of the granted Hunger I effect in seconds. / 获得饥饿 I 效果的时长（秒）。")
-            .defineInRange("hungerDurationSeconds", 3, 1, 100000);
-
-    /**
-     * Duration of the granted Nausea effect, in seconds. 获得反胃效果的时长（秒）。
-     */
-    public static final ForgeConfigSpec.IntValue DONT_WANT_NAUSEA_DURATION_SECONDS = BUILDER
-            .comment("Duration of the granted Nausea I effect in seconds. / 获得反胃 I 效果的时长（秒）。")
-            .defineInRange("nauseaDurationSeconds", 3, 1, 100000);
+    public static final ForgeConfigSpec.ConfigValue<String> DONT_WANT_EFFECT_TABLE = BUILDER
+            .comment(
+                    "Effects granted when eating a 'don't want' food. Same format as rewardEffects:",
+                    "[[[{\"id\":\"<effect>\",\"time\":<ticks>,\"lvl\":<level>}, ...], <weight>], ...]",
+                    "One entry is picked at random weighted by <weight>, then every effect in its list is",
+                    "applied. An empty effect list means no effect. Unknown effect ids are skipped with a",
+                    "WARN instead of crashing.",
+                    "食用“不想吃”食物时给予的效果表，格式与 rewardEffects 相同：",
+                    "[[[{\"id\":\"效果id\",\"time\":持续tick数,\"lvl\":等级}, ...], 权重], ...]",
+                    "按权重随机选择其中一组并施加该组内所有效果；效果列表可留空表示不施加任何效果。",
+                    "遇到未知的效果 id 只会输出一行 WARN 警告并跳过，不会导致游戏崩溃。",
+                    "默认：各有 2.5% 概率施加 3 秒饥饿 I 或 3 秒反胃 I，其余 95% 不施加任何效果。")
+            .define("penaltyEffects",
+                    "[[[{\"id\":\"minecraft:hunger\",\"time\":60,\"lvl\":1}],1],[[{\"id\":\"minecraft:nausea\",\"time\":60,\"lvl\":1}],1],[[],38]]",
+                    obj -> obj instanceof String);
 
     static {
         BUILDER.pop();
