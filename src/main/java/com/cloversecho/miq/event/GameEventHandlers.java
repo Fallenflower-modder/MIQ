@@ -31,13 +31,13 @@ public final class GameEventHandlers {
         }
     }
 
-    /** Adds a dynamic desire tooltip line to food items. 为食物物品动态添加欲望 Tooltip。 */
+    /** Adds a dynamic desire tooltip line to food items (sandwiches use their ingredient aggregate). 为食物物品动态添加欲望 Tooltip（三明治按成分汇总）。 */
     @SubscribeEvent
     public void onItemTooltip(ItemTooltipEvent event) {
         if (event.getEntity() == null) {
             return;
         }
-        DesireCategory cat = DailyRecipeManager.getCategory(event.getItemStack().getItem());
+        DesireCategory cat = DailyRecipeManager.getDesireCategory(event.getItemStack(), event.getEntity());
         if (cat == null) {
             return;
         }

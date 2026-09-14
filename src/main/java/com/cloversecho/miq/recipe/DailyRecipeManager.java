@@ -24,12 +24,16 @@ import net.minecraft.world.food.FoodProperties;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraftforge.fml.ModList;
 import org.slf4j.Logger;
+import someassemblyrequired.item.sandwich.SandwichItem;
+import someassemblyrequired.item.sandwich.SandwichItemHandler;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Holds the current daily recipe (food -> desire category) shared by the server
@@ -401,6 +405,12 @@ public final class DailyRecipeManager {
         recordEat(player, stack);
 
         DesireCategory cat = getCategory(stack.getItem());
+        // Some Assembly Required sandwiches: the overall desire category is derived from the
+        // categories of every ingredient (re-evaluated live, so it follows recipe refreshes).
+        // Some Assembly Required 的三明治：整体欲望分类由全部成分的分类实时推导（随食谱刷新动态变化）。
+        if (isSandwichModLoaded() && stack.getItem() instanceof SandwichItem) {
+            cat = resolveSandwichCategory(stack, player);
+        }
         if (cat == null || cat == DesireCategory.WILLING) {
             return base;
         }
@@ -430,6 +440,83 @@ public final class DailyRecipeManager {
         List<Pair<MobEffectInstance, Float>> effects = scaleEffectDurations(base.getEffects(), durFactor);
         effects.addAll(rollEffectTable(MIQConfig.DONT_WANT_EFFECT_TABLE.get(), rng));
         return buildScaled(base, nutrition, saturation, effects);
+    }
+
+    /**
+     * Whether the Some Assembly Required mod is installed (its API is only touched then).
+     * 判断是否安装了 Some Assembly Required（仅在已安装时才会触及其 API 类）。
+     */
+    private static boolean isSandwichModLoaded() {
+        return ModList.get().isLoaded("some_assembly_required");
+    }
+
+    /**
+     * Returns the desire category used for tooltips. Sandwiches derive their category from the
+     * aggregate of their ingredients (re-evaluated live); other foods use their item's category.
+     *
+     * 返回用于 Tooltip 显示的欲望分类：三明治按其成分实时汇总推导整体分类，
+     * 其他食物则直接使用物品自身的分类。
+     */
+    public static DesireCategory getDesireCategory(ItemStack stack, Player player) {
+        if (isSandwichModLoaded() && stack.getItem() instanceof SandwichItem) {
+            return resolveSandwichCategory(stack, player);
+        }
+        return getCategory(stack.getItem());
+    }
+
+    /**
+     * Derives the overall desire category of a sandwich from its ingredients.
+     * <ul>
+     *   <li>If the number of 'don't want' ingredients exceeds 'very want', the sandwich is
+     *       'willing' when the number of 'willing' ingredients is at least that of 'don't want',
+     *       otherwise 'don't want'.</li>
+     *   <li>Otherwise ('very want' count &ge; 'don't want' count) the sandwich is 'very want'.</li>
+     * </ul>
+     * Non-food ingredients and foods absent from the recipe are not counted. Returns {@code null}
+     * when no ingredient participates in the recipe, meaning the sandwich is not part of MIQ.
+     * This is re-computed on every call, so the same sandwich's desire follows recipe refreshes.
+     *
+     * 根据三明治的成分推导其整体欲望分类：
+     * <ul>
+     *   <li>当“不想吃”成分数大于“想吃”成分数时：若“愿意吃”成分数不小于“不想吃”成分数则整体为
+     *       “愿意吃”，否则整体为“不想吃”。</li>
+     *   <li>否则（“想吃”成分数不小于“不想吃”成分数）整体为“想吃”。</li>
+     * </ul>
+     * 非食物成分以及不在食谱中的食物不计入。没有任何成分参与食谱时返回 null（三明治不参与本模组）。
+     * 该方法每次调用都会重新计算，因此同一个三明治的食欲会随食谱刷新动态变化。
+     */
+    private static DesireCategory resolveSandwichCategory(ItemStack sandwich, Player player) {
+        Optional<SandwichItemHandler> handler = SandwichItemHandler.get(sandwich);
+        if (handler.isEmpty()) {
+            return null;
+        }
+        int veryWant = 0;
+        int willing = 0;
+        int dontWant = 0;
+        for (ItemStack ingredient : handler.get().getItems()) {
+            // ItemStack-aware properties keep per-stack modifiers (e.g. KaleidoscopeCookery quality),
+            // and filter out non-food ingredients. 感知 ItemStack 的属性保留逐堆叠修正（如品质），并过滤非食物成分。
+            FoodProperties food = ingredient.getItem().getFoodProperties(ingredient, player);
+            if (food == null || food.getNutrition() <= 0) {
+                continue;
+            }
+            DesireCategory c = getCategory(ingredient.getItem());
+            if (c == null) {
+                continue;
+            }
+            switch (c) {
+                case VERY_WANT -> veryWant++;
+                case WILLING -> willing++;
+                case DON_T_WANT -> dontWant++;
+            }
+        }
+        if (veryWant == 0 && willing == 0 && dontWant == 0) {
+            return null;
+        }
+        if (dontWant > veryWant) {
+            return willing >= dontWant ? DesireCategory.WILLING : DesireCategory.DON_T_WANT;
+        }
+        return DesireCategory.VERY_WANT;
     }
 
     /**

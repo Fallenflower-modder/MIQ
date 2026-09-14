@@ -32,12 +32,18 @@ public abstract class PlayerEatMixin {
             method = "eat(Lnet/minecraft/world/level/Level;Lnet/minecraft/world/item/ItemStack;)Lnet/minecraft/world/item/ItemStack;",
             at = @At("HEAD"))
     private void miq$beginEat(Level level, ItemStack stack, CallbackInfoReturnable<ItemStack> cir) {
-        FoodProperties base = stack.getItem().getFoodProperties();
+        Player self = (Player) (Object) this;
+        // Use the ItemStack-aware overload so that mod-provided per-stack food properties are kept:
+        // KaleidoscopeCookery's cuisine-quality ratio (nutrition/saturation/effect duration) and
+        // Some Assembly Required's sandwich aggregate are both applied inside this method.
+        // 使用感知 ItemStack 的 getFoodProperties 重载，保留各模组基于物品堆叠的食物属性：
+        // KaleidoscopeCookery 的食物品质偏移（饱食度/饱和度/效果时长）与
+        // Some Assembly Required 的三明治成分汇总都在该方法内部生效。
+        FoodProperties base = stack.getItem().getFoodProperties(stack, self);
         if (base == null) {
             EatContext.clear();
             return;
         }
-        Player self = (Player) (Object) this;
         EatContext.set(DailyRecipeManager.buildModifiedFoodProperties(base, self, stack));
     }
 
