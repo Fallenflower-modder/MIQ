@@ -46,6 +46,25 @@ public final class DailyRecipeManager {
     /** The currently active recipe, shared by the logical server and the client. 当前生效的每日食谱。 */
     private static volatile Map<Item, DesireCategory> currentRecipe = Map.of();
 
+    /**
+     * Optional, plugin-supplied resolver that derives a desire category from a whole {@link ItemStack}
+     * (e.g. composite foods whose category depends on their contents, like SAR sandwiches). If it returns
+     * {@code null}, the plain item-based lookup is used instead. Installed by {@link #registerStackDesireResolver}.
+     * 可选的可插拔解析器：根据整个 ItemStack 推导欲望分类（例如内容物决定的合成类食物，如 SAR 三明治）。
+     * 返回 null 时回退到基于物品的常规查询。由 registerStackDesireResolver 安装。
+     */
+    @FunctionalInterface
+    public interface StackDesireResolver {
+        DesireCategory resolve(ItemStack stack);
+    }
+
+    private static volatile StackDesireResolver stackDesireResolver;
+
+    /** Installs a stack-based desire resolver (called once at startup when the optional mod is loaded). */
+    public static void registerStackDesireResolver(StackDesireResolver resolver) {
+        stackDesireResolver = resolver;
+    }
+
     /** Day-time of the last observed server tick. 上次记录的服务器时间刻。 */
     private static long lastTickDayTime = -1L;
     /** Whether the startup recipe (loaded or freshly generated) has been set. 是否已完成启动期食谱初始化。 */
@@ -85,6 +104,27 @@ public final class DailyRecipeManager {
      */
     public static DesireCategory getCategory(Item item) {
         return item == null ? null : currentRecipe.get(item);
+    }
+
+    /**
+     * Returns the current desire category for a whole {@link ItemStack}, delegating to an optional
+     * stack-based resolver first (so composite foods like SAR sandwiches aggregate their ingredients),
+     * then falling back to the plain item lookup for ordinary foods.
+     * 返回整个物品堆叠当前的欲望分类：先尝试可选堆叠解析器（合成类食物如 SAR 三明治按配料聚合），
+     * 否则对普通食物回退到按物品查询。
+     */
+    public static DesireCategory getDesireForStack(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return null;
+        }
+        StackDesireResolver resolver = stackDesireResolver;
+        if (resolver != null) {
+            DesireCategory category = resolver.resolve(stack);
+            if (category != null) {
+                return category;
+            }
+        }
+        return getCategory(stack.getItem());
     }
 
     /** Replaces the recipe on the client when a sync payload arrives. 客户端收到同步包后替换本地食谱。 */
@@ -400,7 +440,7 @@ public final class DailyRecipeManager {
         // 记录本次进食（仅服务端）供下次刷新做权重偏移。
         recordEat(player, stack);
 
-        DesireCategory cat = getCategory(stack.getItem());
+        DesireCategory cat = getDesireForStack(stack);
         if (cat == null || cat == DesireCategory.WILLING) {
             return base;
         }

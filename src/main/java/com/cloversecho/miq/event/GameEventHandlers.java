@@ -34,7 +34,7 @@ public final class GameEventHandlers {
         if (event.getEntity() == null) {
             return;
         }
-        DesireCategory cat = DailyRecipeManager.getCategory(event.getItemStack().getItem());
+        DesireCategory cat = DailyRecipeManager.getDesireForStack(event.getItemStack());
         if (cat == null) {
             return;
         }

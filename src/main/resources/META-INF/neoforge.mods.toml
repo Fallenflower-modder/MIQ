@@ -32,3 +32,11 @@ modId="appleskin"
 type="optional"
 ordering="NONE"
 side="CLIENT"
+
+# Optional Some Assembly Required integration (sandwich whole-desire tooltip/eat compatibility).
+# Present on both sides so dedicated servers + clients agree on sandwich desire/lore.
+[[dependencies.${mod_id}]]
+modId="someassemblyrequired"
+type="optional"
+ordering="NONE"
+side="BOTH"

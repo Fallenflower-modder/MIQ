@@ -1,6 +1,7 @@
 package com.cloversecho.miq;
 
 import com.cloversecho.miq.compat.AppleSkinCompat;
+import com.cloversecho.miq.compat.SarCompat;
 import com.cloversecho.miq.config.MIQConfig;
 import com.cloversecho.miq.event.GameEventHandlers;
 import com.cloversecho.miq.network.RecipeSyncPayload;
@@ -48,6 +49,12 @@ public final class MIQ {
         // so the mod stays functional (and starts cleanly) without it.
         if (ModList.get().isLoaded("appleskin")) {
             NeoForge.EVENT_BUS.register(new AppleSkinCompat());
+        }
+
+        // Install a stack-based desire resolver for Some Assembly Required sandwiches only when SAR is
+        // loaded, so tooltips/eats derive the sandwich's whole desire from its ingredients (dynamic per refresh).
+        if (ModList.get().isLoaded("someassemblyrequired")) {
+            DailyRecipeManager.registerStackDesireResolver(SarCompat.RESOLVER);
         }
 
         // Startup/load, shutdown/save, and the /miq refresh command.
