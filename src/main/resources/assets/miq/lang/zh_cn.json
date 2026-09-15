@@ -1,0 +1,12 @@
+{
+    "tooltip.miq.very_want": "今天很想吃这个",
+    "tooltip.miq.willing": "今天吃这个也不是不行",
+    "tooltip.miq.dont_want": "今天不太想吃这个",
+    "chat.miq.want": "现在想吃%s...",
+    "command.miq.refresh": "每日食谱已刷新！",
+    "config.miq.title": "每日灵魂拷问",
+    "config.miq.section.recipe": "每日食谱",
+    "config.miq.section.desireReward": "欲望奖励（今天很想吃）",
+    "config.miq.section.desirePenalty": "欲望惩罚（今天不想吃）",
+    "config.miq.section.desireWeights": "欲望生成比例"
+}

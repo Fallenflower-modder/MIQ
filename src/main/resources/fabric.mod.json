@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "miq",
+  "version": "${version}",
+  "name": "${mod_name}",
+  "description": "${mod_description}",
+  "authors": [
+    "${mod_authors}"
+  ],
+  "license": "${mod_license}",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.cloversecho.miq.MIQ"
+    ],
+    "client": [
+      "com.cloversecho.miq.client.MIQClient"
+    ],
+    "appleskin": [
+      "com.cloversecho.miq.compat.AppleSkinCompat"
+    ]
+  },
+  "mixins": [
+    "miq.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": "${loader_version_range}",
+    "fabric-api": "*",
+    "minecraft": "${minecraft_version_range}",
+    "java": ">=21"
+  },
+  "suggests": {
+    "appleskin": "*",
+    "kaleidoscope_cookery": "*"
+  }
+}
